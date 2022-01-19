@@ -1,0 +1,200 @@
+---
+title: "MAOC_POC"
+author: "Emily Lacroix"
+date: "Last update: 1/19/2022"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This script analyzes the Density Fractionation data from the soils used in both the Disturbance and Oxygen Enrichment Incubations.
+
+# Setup
+
+## Load libraries
+```{r}
+
+library(readxl)
+library(car)
+library(tidyverse)
+
+options(dplyr.summarise.inform = FALSE)
+```
+
+## Files
+
+```{r eval=FALSE}
+data_file <- "StanfordDish_AllData.xlsx"
+```
+
+```{r include=FALSE}
+data_file <- "~/Box Sync/Stanford (elacroix@stanford.edu)/Research/StanfordDish/Data/StanfordDish_AllData.xlsx"
+```
+
+## Constants 
+```{r}
+control_cores <- c(1, 5, 9, 13)
+
+```
+
+## Figure theme
+```{r}
+my_theme <- function(base_size = 12, base_family = ""){ ## Control base font face and size. use `rel()` for lelative font size.
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(
+      panel.border = element_rect(colour = "black", fill = "transparent"),
+      panel.background  = element_blank(),
+      panel.grid = element_blank(),
+      strip.background = element_blank(),
+      legend.position="top",
+      legend.title = element_blank(),
+      strip.text = element_text(size = 13)
+    )
+}
+
+```
+
+## Figure labels
+```{r}
+site_labels <- c(
+  "DISHC" = "Clayey\nLoam",
+  "DISHT" = "Loam",
+  "DISHR" = "Sandy\n Loam"
+)
+
+```
+
+
+# Import and Combine Data 
+
+## Import data
+```{r}
+dens_frac <- 
+  data_file %>% 
+  read_xlsx(sheet = "DensityFractionation")
+
+tc_tn <-
+  data_file %>% 
+  read_xlsx(sheet = "TotalCarbon")
+```
+
+## Combine Data
+```{r}
+
+maoc_poc <-
+  dens_frac %>% 
+  left_join(
+    tc_tn %>% 
+      group_by(site) %>% 
+      summarise(avg_perc_c = mean(perc_c, na.rm = TRUE)),
+    by = "site"
+  ) %>% 
+  mutate(
+    estimated_total_mg_c = 1000 * sample_mass * (avg_perc_c / 100),
+    prop_maoc = mg_c_hf / estimated_total_mg_c,
+    prop_poc = mg_c_lf / estimated_total_mg_c,
+    across("site", factor, levels = c("DISHC", "DISHT", "DISHR")),
+    percent_recovery = 100* (total_g_lf + mass_hf) / sample_mass
+  ) 
+
+
+```
+
+# Figures, Tables, Calculations
+
+##  Percent Recovery
+
+```{r}
+maoc_poc %>% pull(percent_recovery) %>% summary()
+```
+
+## Table 1: MAOC & POC 
+
+```{r}
+maoc_poc %>% 
+  group_by(site) %>% 
+  summarise(
+    avg_perc_poc = 100 * mean(prop_poc),
+    se_perc_poc = 100 * sd(prop_poc) / sqrt(n()),
+    avg_perc_maoc = 100 * mean(prop_maoc),
+    se_perc_maoc = 100 * sd(prop_maoc) / sqrt(n())
+  ) 
+```
+
+# Statistics
+
+## POC
+
+### Check for normality
+```{r}
+maoc_poc %>% 
+  group_by(site) %>% 
+  summarise(
+    normality_stat = shapiro.test(prop_poc)$statistic,
+    normality_p_value = shapiro.test(prop_poc)$p.value
+  )
+
+```
+
+
+### Check for equal variances
+
+```{r}
+leveneTest(
+  prop_poc ~ site, 
+  data = maoc_poc 
+)
+
+```
+The sites proportion of POC are normally distributed with equal variances. 
+
+### ANOVA
+
+```{r}
+summary(aov(prop_poc ~ site, data = maoc_poc)) 
+
+```
+
+They are significantly different! 
+Now do Tukey's HSD
+
+```{r}
+TukeyHSD(aov(prop_poc ~ site, data = maoc_poc))
+```
+
+Only DISHR is different from DISHC, otherwise there is slight overlap it appears
+
+## MAOC
+
+### Check for normality
+```{r}
+maoc_poc %>% 
+  group_by(site) %>% 
+  summarise(
+    normality_stat = shapiro.test(prop_maoc)$statistic,
+    normality_p_value = shapiro.test(prop_maoc)$p.value
+  )
+
+
+```
+
+### Check for equal variances
+```{r}
+leveneTest(
+  prop_maoc ~ site, 
+  data = maoc_poc 
+)
+```
+
+Proportion MAOC is also normally distributed with equal variances. 
+
+### ANOVA
+
+```{r}
+summary(aov(prop_maoc ~ site, data = maoc_poc)) 
+```
+

@@ -1,0 +1,269 @@
+---
+title: "ddPCR"
+author: "Emily Lacroix"
+date: "Last update: 1/14/2022"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set-up
+
+## Libraries
+```{r warning=FALSE, message=FALSE}
+
+library(readxl)
+library(MASS)
+library(car)
+library(scales)
+library(tidyverse)
+library(conflicted)
+
+conflicted::conflict_prefer("select", "dplyr")
+conflicted::conflict_prefer("filter", "dplyr")
+
+
+```
+
+## Files
+
+```{r eval=FALSE}
+data_file <- "StanfordDish_AllData.xlsx"
+```
+
+
+```{r include=FALSE}
+
+data_file <- "~/Box Sync/Stanford (elacroix@stanford.edu)/Research/StanfordDish/Data/StanfordDish_AllData.xlsx"
+
+```
+
+## Labels 
+```{r}
+site_labels <- c(
+  "DISHC" = "Clay\nLoam",
+  "DISHT" = "Loam",
+  "DISHR" = "Sandy\n Loam"
+)
+```
+
+## Figure theme
+```{r}
+my_theme <- function(base_size = 12, base_family = ""){ ## Control base font face and size. use `rel()` for relative font size.
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(
+      panel.border = element_rect(colour = "black", fill = "transparent"),
+      panel.background  = element_blank(),
+      panel.grid = element_blank(),
+      strip.background = element_blank(),
+      legend.position="top",
+      legend.title = element_blank(),
+      strip.text = element_text(size = 13)
+    )
+}
+
+```
+
+
+## Load data
+```{r}
+
+ddpcr <- 
+  read_xlsx(data_file, sheet = "ddPCR") %>% 
+  mutate(
+    across(
+      site, 
+      ~factor(., levels = c("DISHC", "DISHT", "DISHR"), labels = site_labels)
+    )
+  )
+
+```
+
+
+# 16S - absolute abundance
+
+## Figure S7
+```{r}
+ddpcr %>% 
+  group_by(site) %>% 
+  summarise(
+    mean_16s = mean(copies_per_g_16s),
+    se_16s = sd(copies_per_g_16s) / sqrt(n())
+  ) %>% 
+  ggplot(aes(x = site, y = mean_16s)) + 
+  geom_pointrange(
+    aes(ymin = mean_16s - se_16s, ymax = mean_16s + se_16s),
+    fatten = 4,
+    size = 1
+  ) +
+  my_theme() + 
+  theme(
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 20),
+    aspect.ratio = 1.5
+  ) +
+  labs(
+    y = "16S rRNA (copies per g dry soil) ",
+    x = NULL
+  )
+
+```
+
+# mcrA - absolute abundance
+
+## Figure S8
+```{r}
+ddpcr %>% 
+  group_by(site) %>% 
+  summarise(
+    mean_mcrA = mean(copies_per_g_mcra, na.rm = TRUE),
+    se_mcrA = sd(copies_per_g_mcra, na.rm = TRUE) / sqrt(n())
+  ) %>% 
+  ggplot(aes(x = site, y = mean_mcrA)) + 
+  geom_pointrange(
+    aes(ymin = mean_mcrA - se_mcrA, ymax = mean_mcrA + se_mcrA),
+    fatten = 4,
+    size = 1
+  ) +
+  scale_y_continuous(labels = scientific) +
+  my_theme() + 
+  theme(
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 20),
+    aspect.ratio = 1.5
+  ) +
+  labs(
+    y = "mcrA (copies per g dry soil) ",
+    x = NULL
+  )
+```
+
+## Statistics 
+
+Non-transformed mcrA copies per g are normally distributed with very unequal variances.
+
+### Check normality of log transformed copies per g mcrA
+
+```{r}
+
+ddpcr %>% 
+  mutate(log_copies = log(copies_per_g_mcra + 5656)) %>% #adding half the lowest non-zero value
+  group_by(site) %>% 
+  summarize(p_normality = shapiro.test(log_copies)$p.value) 
+
+```
+
+### Check for equal variances of log transformed copies per g mcrA
+
+```{r}
+
+leveneTest(
+  log_copies ~ site, 
+  data = 
+    ddpcr %>% mutate(log_copies = log(copies_per_g_mcra + 5656))
+)
+
+```
+Log transformed variances ARE equal. 
+
+### ANOVA of log transformed copies per g mcrA
+
+```{r}
+aov_conc_site_manual <- 
+  aov(
+  log_copies ~ site, 
+    ddpcr %>% mutate(log_copies = log(copies_per_g_mcra + 5656))
+)
+
+aov_conc_site_manual %>% summary()
+
+TukeyHSD(aov_conc_site_manual) 
+
+```
+
+There are significant differences between:
+1) Loam & Clayey Loam 
+2) Sandy Loam & Clayey Loam 
+
+
+# Normalized mcrA
+
+## Figure 5
+
+```{r}
+ddpcr %>% 
+  group_by(site) %>% 
+  summarize(
+    mean_prop_mcra = mean(proportion_mcra),
+    se_prop_mcra = sd(proportion_mcra) / sqrt(n())
+  ) %>% 
+  ggplot(aes(x = site, y = mean_prop_mcra)) + 
+  geom_pointrange(
+    aes(
+      ymin = mean_prop_mcra - se_prop_mcra, 
+      ymax = mean_prop_mcra + se_prop_mcra
+    ),
+    fatten = 4,
+    size = 1
+  ) + 
+  my_theme() + 
+  theme(
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 20),
+    aspect.ratio = 1.5
+  ) +
+  labs(
+    y = "copies mcrA / copies 16S",
+    x = NULL
+  )
+
+
+```
+
+
+## Statistics 
+
+### Check normality 
+```{r}
+
+ddpcr %>%   
+  group_by(site) %>% 
+  summarize(p_normality = shapiro.test(proportion_mcra)$p.value)
+  
+```
+
+### Check for equal variances 
+
+```{r}
+leveneTest(
+  proportion_mcra ~ site, 
+  data = ddpcr
+)
+```
+
+
+Proportion mcrA is normally distributed with equal variances. 
+
+### ANOVA
+```{r}
+
+aov_prop_mcra <- 
+  aov(
+  proportion_mcra ~ site, 
+  data = ddpcr
+)
+
+aov_prop_mcra %>% summary()
+
+TukeyHSD(aov_prop_mcra) 
+
+```
+
+Like the absolute abundance mcrA data, there is a significant difference between:
+1) Loam & Clayey Loam
+2) Sandy Loam & Clayey Loam
+

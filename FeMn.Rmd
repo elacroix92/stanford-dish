@@ -1,0 +1,697 @@
+---
+title: "FeMn"
+author: "Emily Lacroix"
+date: "Last update: 1/14/2022"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+## Load libraries
+```{r}
+library(tidyverse)
+library(readxl)
+library(multcompView)
+library(car)
+
+options(dplyr.summarise.inform = FALSE)
+```
+
+## Files
+
+```{r eval=FALSE}
+data_file <- "StanfordDish_AllData.xlsx"
+```
+
+```{r include=FALSE}
+data_file <- "~/Box Sync/Stanford (elacroix@stanford.edu)/Research/StanfordDish/Data/StanfordDish_AllData.xlsx"
+```
+
+## Constants 
+```{r}
+control_cores <- c(1, 5, 9, 13)
+
+```
+
+## Figure theme
+```{r}
+my_theme <- function(base_size = 12, base_family = ""){ ## Control base font face and size. use `rel()` for relative font size.
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(
+      panel.border = element_rect(colour = "black", fill = "transparent"),
+      panel.background  = element_blank(),
+      panel.grid = element_blank(),
+      strip.background = element_blank(),
+      legend.position="top",
+      legend.title = element_blank(),
+      strip.text = element_text(size = 13)
+    )
+}
+
+```
+
+## Figure labels
+```{r}
+site_labels <- c(
+  "DISHC" = "Clay\nLoam",
+  "DISHT" = "Loam",
+  "DISHR" = "Sandy\nLoam"
+)
+
+```
+
+## Useful Functions
+```{r}
+tri.to.squ<-function(x)
+{
+  rn <- row.names(x)
+  cn <- colnames(x)
+  an <- unique(c(cn,rn))
+  myval <- x[!is.na(x)]
+  mymat <- 
+    matrix(1, nrow = length(an), ncol = length(an), dimnames = list(an,an))
+  for(ext in 1:length(cn))
+  {
+    for(int in 1:length(rn))
+    {
+      if(is.na(x[row.names(x) == rn[int], colnames(x) == cn[ext]])) next
+      mymat[row.names(mymat) == rn[int], colnames(mymat) == cn[ext]] <- 
+        x[row.names(x) == rn[int], colnames(x) == cn[ext]]
+      mymat[row.names(mymat) == cn[ext], colnames(mymat) == rn[int]] <- 
+        x[row.names(x) == rn[int], colnames(x) == cn[ext]]
+    }
+  }
+  return(mymat)
+}
+```
+
+# Import and Combine Data 
+
+## Import data
+
+```{r}
+
+fe_mn <- 
+  data_file %>% 
+  read_xlsx(sheet = "FeMnHCl")
+
+dist_grav <- 
+  data_file %>% 
+  read_xlsx(sheet = "GravimetricData - Oxic")
+
+```
+
+## Combine
+
+This code:
+* joins the Fe and Mn data with the associated moisture data for the core
+* Categorizes cores as disturbed or undisturbed
+* Assigns the cores to a WFPS bin
+* Eliminates cores with < 15% WFPS 
+* Makes sites and WFPS category into factors 
+
+```{r}
+
+fe_mn_data <-
+  fe_mn %>% 
+  full_join(dist_grav, by = c("site", "core", "experiment")) %>% 
+  mutate(
+    wfps_bin = 
+      factor(
+        case_when(
+          wfps <= 60 ~ "15 - 60 %",
+          is.na(wfps) ~ "15 - 60 %",
+          experiment == "OxEn" ~ "15 - 60 %",
+          wfps > 60 ~ "> 60 %",
+          TRUE ~ NA_character_
+        ),
+        levels = c("15 - 60 %", "> 60 %")
+      )
+  ) %>% 
+  filter(wfps >= 15 | experiment == "OxEn") %>% 
+  mutate(
+    control_disturbed = 
+      factor(
+        if_else(
+          (core %in% control_cores | experiment == "OxEn"), 
+          "Undisturbed", 
+          "Disturbed"
+        ),
+        levels = c("Undisturbed", "Disturbed")
+      ),
+    across("site", factor, levels = c("DISHC", "DISHT", "DISHR"), labels = site_labels),
+    across(wfps_bin, factor, levels = c("15 - 60 %", "> 60 %"))
+  ) 
+
+fe_mn
+
+```
+
+
+# Figures and Analysis
+
+## Fe II to III 
+
+```{r}
+
+fe_ii_to_iii_averages <- 
+  fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site) %>% 
+  summarise(
+    site_avg_fe_ii_to_iii = mean(fe_ii_to_iii, na.rm = TRUE),
+    site_se_fe_ii_to_iii = sd(fe_ii_to_iii, na.rm = TRUE) / sqrt(n())
+  )
+
+fe_ii_to_iii_averages
+
+```
+### Figure 4
+
+```{r}
+fe_mn_data %>% 
+  group_by(site, wfps_bin, control_disturbed) %>% 
+  summarise(
+    avg_fe_ii_to_iii = mean(fe_ii_to_iii, na.rm = TRUE),
+    se_fe_ii_to_iii = sd(fe_ii_to_iii, na.rm = TRUE) / sqrt(n())
+  ) %>% 
+  left_join(fe_ii_to_iii_averages, by = "site") %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  ggplot(aes(x = site, group = control_disturbed)) +
+  geom_col(aes(y = avg_fe_ii_to_iii, fill = control_disturbed), position = "dodge") +
+  geom_errorbar(
+    aes(ymin = avg_fe_ii_to_iii, ymax = avg_fe_ii_to_iii + se_fe_ii_to_iii),
+    position = "dodge",
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = site_avg_fe_ii_to_iii - site_se_fe_ii_to_iii,
+      ymax = site_avg_fe_ii_to_iii + site_se_fe_ii_to_iii
+    ),
+    color = "gold",
+    width = 0,
+    size = 1.5
+  ) + 
+  geom_point(
+    aes(
+      y = site_avg_fe_ii_to_iii, 
+
+    ), 
+    color = "gold", 
+    shape = 18, 
+    size = 6
+  ) + 
+  scale_fill_manual(values = c("black", "darkred")) + 
+  my_theme() +
+  theme(
+    aspect.ratio = 1.5,
+    legend.position = "right",
+    axis.text = element_text(size = 16),
+    axis.title = element_text(size = 18),
+    legend.text = element_text(size = 16)
+  ) +
+  labs(
+    x = NULL,
+    y = expression(paste(Fe^`2+`~`/`~Fe[tot]))
+  )
+
+```
+
+### Table S1: Fe/Mn replicates
+
+```{r}
+fe_mn_data %>% 
+  group_by(site, wfps_bin, control_disturbed) %>% 
+  summarise(
+    avg_fe_ii_to_iii = mean(fe_ii_to_iii, na.rm = TRUE),
+    se_fe_ii_to_iii = sd(fe_ii_to_iii, na.rm = TRUE) / sqrt(n()),
+    reps = n()
+  ) %>% 
+  filter(wfps_bin == "15 - 60 %")
+```
+
+
+### Statistics - by bin
+
+#### Check normality 
+```{r}
+fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site, wfps_bin, control_disturbed) %>%
+  summarise(
+    normality_stat = shapiro.test(fe_ii_to_iii)$statistic,
+    normality_p_value = shapiro.test(fe_ii_to_iii)$p.value
+  ) #common transformations do not help normality
+
+
+```
+#### Check for equal variances
+
+```{r}
+leveneTest(
+  fe_ii_to_iii ~ site*wfps_bin*control_disturbed, 
+  data = fe_mn_data %>% filter(wfps_bin == "15 - 60 %")
+)
+```
+
+
+Non-normally distributed data with unequal variances. Pairwise wilcoxon rank sum test would be appropriate
+
+#### Pairwise wilcoxon rank sum
+
+```{r warning=FALSE}
+wilcoxon_fe_mn_data <-
+  fe_mn_data %>% 
+  mutate(
+    wfps_id = 
+      case_when(
+        wfps_bin == "15 - 60 %" ~ "dry",
+        wfps_bin == "> 60 %" ~ "wet",        
+      ),
+    wilcoxon_id = str_c(site,"_",control_disturbed,"_",wfps_id)
+  )
+
+fe_ii_to_iii_wilcox <- 
+  pairwise.wilcox.test(
+  x = wilcoxon_fe_mn_data$fe_ii_to_iii,
+  g = wilcoxon_fe_mn_data$wilcoxon_id,
+  p.adjust.method = "BH",
+  paired = FALSE
+)
+
+fe_ii_to_iii_matrix <- tri.to.squ(fe_ii_to_iii_wilcox$p.value)
+fe_ii_to_iii_letters <- 
+  multcompLetters(
+    fe_ii_to_iii_matrix, 
+    compare ="<=", 
+    threshold = 0.05, 
+    Letters = letters
+  )
+
+fe_ii_to_iii_letters
+```
+
+
+### Statistics - by site
+
+```{r}
+fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site) %>%
+  summarise(
+    normality_stat = shapiro.test(fe_ii_to_iii)$statistic,
+    normality_p_value = shapiro.test(fe_ii_to_iii)$p.value
+  ) #common transformations do not help normality
+
+fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  ggplot() +
+  geom_histogram(aes(x = log(fe_ii_to_iii), fill = site), alpha = 0.2)
+
+
+leveneTest(
+  fe_ii_to_iii ~ site, 
+  data = fe_mn_data %>% filter(wfps_bin == "15 - 60 %")
+)
+```
+
+Non-normally distributed data with unequal variances. Pairwise wilcoxon rank sum test would be appropriate
+
+#### Pairwise Wilcoxon by site 
+```{r warning=FALSE}
+
+wilcoxon_fe_mn_data_site <-
+  fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %")
+
+fe_ii_to_iii_wilcox_site <- 
+  pairwise.wilcox.test(
+  x = wilcoxon_fe_mn_data_site$fe_ii_to_iii,
+  g = wilcoxon_fe_mn_data_site$site,
+  p.adjust.method = "BH",
+  paired = FALSE
+)
+
+fe_ii_to_iii_matrix_site <- tri.to.squ(fe_ii_to_iii_wilcox_site$p.value)
+fe_ii_to_iii_letters_site <- 
+  multcompLetters(
+    fe_ii_to_iii_matrix_site, 
+    compare ="<=", 
+    threshold = 0.05, 
+    Letters = letters
+  )
+
+fe_ii_to_iii_letters_site
+
+fe_ii_to_iii_wilcox_site
+```
+
+
+
+
+## Fe2+ 
+
+### Figure S6
+```{r}
+fe_ii_averages <- 
+  fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site) %>% 
+  summarise(
+    site_avg_fe_ii = mean(fe_ii_mg_kg, na.rm = TRUE),
+    site_se_fe_ii = sd(fe_ii_mg_kg, na.rm = TRUE) / sqrt(n())
+  )
+
+fe_ii_averages
+```
+
+
+
+```{r}
+fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site, wfps_bin, control_disturbed) %>% 
+  summarise(
+    avg_fe_ii = mean(fe_ii_mg_kg, na.rm = TRUE),
+    se_fe_ii = sd(fe_ii_mg_kg, na.rm = TRUE) / sqrt(n())
+  ) %>% 
+  left_join(fe_ii_averages, by = "site") %>% 
+  ggplot(aes(x = site, fill = control_disturbed)) +
+  geom_col(aes(y = avg_fe_ii), position = "dodge") + 
+  geom_errorbar(
+    aes(ymin = avg_fe_ii, ymax = avg_fe_ii + se_fe_ii),
+    position = "dodge"
+  ) + 
+  geom_errorbar(
+    aes(
+      ymin = site_avg_fe_ii - site_se_fe_ii,
+      ymax = site_avg_fe_ii + site_se_fe_ii
+    ),
+    color = "gold",
+    width = 0,
+    size = 1.5
+  ) + 
+  geom_point(
+    aes(
+      y = site_avg_fe_ii, 
+
+    ), 
+    color = "gold", 
+    shape = 18, 
+    size = 6,
+    show.legend = FALSE
+  ) + 
+  scale_fill_manual(values = c("black", "darkred")) + 
+  my_theme() + 
+  theme(
+    aspect.ratio = 1.5,
+    legend.position = "right",
+    axis.text = element_text(size = 16),
+    axis.title = element_text(size = 18),
+    legend.text = element_text(size = 16)
+  ) +
+  labs(
+    x = NULL,
+    y = expression(paste(mg~Fe^`2+`~kg^`-1`~soil))
+  )
+
+```
+
+### Statistics - by bin
+
+#### Check for normality
+```{r}
+fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site, wfps_bin, control_disturbed) %>%
+  summarise(
+    normality_stat = shapiro.test(log(fe_ii_mg_kg))$statistic,
+    normality_p_value = shapiro.test(log(fe_ii_mg_kg))$p.value
+  ) #common transformations do not help normality
+
+fe_mn_data %>% 
+  ggplot(aes(x = fe_ii_mg_kg)) + 
+  geom_histogram() + 
+  facet_grid(cols = vars(site), rows = vars(wfps_bin))
+
+
+```
+Non-normal data. Transformations (not shown) do not seem to help.
+
+#### Check for equal variances
+```{r}
+leveneTest(
+  fe_ii_mg_kg ~ site*wfps_bin*control_disturbed, 
+  data = fe_mn_data 
+)
+```
+Unequal variances.
+
+#### Pairwise wilcoxon rank sum 
+```{r warning=FALSE}
+fe_ii_wilcox <- 
+  pairwise.wilcox.test(
+  x = wilcoxon_fe_mn_data$fe_ii_mg_kg,
+  g = wilcoxon_fe_mn_data$wilcoxon_id,
+  p.adjust.method = "BH",
+  paired = FALSE
+)
+
+fe_ii_matrix <- tri.to.squ(fe_ii_wilcox$p.value)
+fe_ii_letters <- multcompLetters(fe_ii_matrix, compare ="<=", threshold = 0.05, Letters = letters)
+
+fe_ii_letters
+```
+
+
+### Statistics - by site
+
+#### Check for normality 
+```{r}
+fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site) %>%
+  summarise(
+    normality_stat = shapiro.test(fe_ii_mg_kg)$statistic,
+    normality_p_value = shapiro.test(fe_ii_mg_kg)$p.value
+  ) #common transformations do not help normality
+
+
+fe_mn_data %>% 
+  ggplot(aes(x = fe_ii_mg_kg)) + 
+  geom_histogram() + 
+  facet_grid(cols = vars(site), rows = vars(wfps_bin))
+
+```
+
+#### Check for equal variances
+```{r}
+leveneTest(
+  fe_ii_mg_kg ~ site*wfps_bin*control_disturbed, 
+  data = fe_mn_data 
+)
+```
+
+
+#### Pairwise Wilcoxon rank sum
+```{r}
+fe_ii_wilcox <- 
+  pairwise.wilcox.test(
+  x = wilcoxon_fe_mn_data$fe_ii_mg_kg,
+  g = wilcoxon_fe_mn_data$site,
+  p.adjust.method = "BH",
+  paired = FALSE
+)
+
+fe_ii_matrix_site <- tri.to.squ(fe_ii_wilcox$p.value)
+fe_ii_letters_site <- multcompLetters(fe_ii_matrix_site, compare ="<=", threshold = 0.05, Letters = letters)
+
+fe_ii_letters_site
+```
+
+
+## Mn 
+
+### Figure S5
+```{r}
+mn_averages <- 
+  fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site) %>% 
+  summarise(
+    site_avg_mn = mean(mn_mg_kg, na.rm = TRUE),
+    site_se_mn = sd(mn_mg_kg, na.rm = TRUE) / sqrt(n())
+  )
+
+
+```
+
+
+```{r}
+fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site, wfps_bin, control_disturbed) %>% 
+  summarise(
+    avg_mn = mean(mn_mg_kg, na.rm = TRUE),
+    se_mn = sd(mn_mg_kg, na.rm = TRUE) / sqrt(n())
+  ) %>% 
+  left_join(mn_averages, by = "site") %>% 
+  ggplot(aes(x = site, fill = control_disturbed)) +
+  geom_col(aes(y = avg_mn), position = "dodge") + 
+  geom_errorbar(
+    aes(ymin = avg_mn, ymax = avg_mn + se_mn),
+    position = "dodge"
+  ) + 
+  geom_errorbar(
+    aes(
+      ymin = site_avg_mn - site_se_mn,
+      ymax = site_avg_mn + site_se_mn
+    ),
+    color = "gold",
+    width = 0,
+    size = 1.5
+  ) + 
+  geom_point(
+    aes(
+      y = site_avg_mn, 
+
+    ), 
+    color = "gold", 
+    shape = 18, 
+    size = 6,
+    show.legend = FALSE
+  ) + 
+  scale_fill_manual(values = c("black", "darkred")) + 
+  my_theme() + 
+  theme(
+    aspect.ratio = 1.5,
+    legend.position = "right",
+    axis.text = element_text(size = 16),
+    axis.title = element_text(size = 18),
+    legend.text = element_text(size = 16)
+  ) +
+  labs(
+    x = NULL,
+    y = expression(paste(mg~extractable~Mn~kg^`-1`~soil))
+  )
+
+```
+
+### Statistics - by bin
+
+#### Check for normality
+```{r}
+
+fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site, wfps_bin, control_disturbed) %>%
+  summarise(
+    normality_stat = shapiro.test(mn_mg_kg)$statistic,
+    normality_p_value = shapiro.test(mn_mg_kg)$p.value
+  )
+
+
+fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  ggplot(aes(x = mn_mg_kg)) + 
+  geom_histogram() + 
+  facet_grid(cols = vars(site), rows = vars(wfps_bin))
+
+
+
+```
+
+#### Check for equal variances
+
+```{r}
+leveneTest(
+  mn_mg_kg ~ site*wfps_bin*control_disturbed, 
+  data = fe_mn_data 
+)
+
+```
+
+
+They are normally distributed with unequal variances. Will need to use Welch's ANOVA! 
+
+#### Welch's ANOVA
+```{r}
+oneway.test(
+  mn_mg_kg ~ site*control_disturbed, 
+  data = fe_mn_data %>% filter(wfps_bin == "15 - 60 %"), 
+  var.equal = FALSE
+)
+
+mn_aov <- 
+  aov(  
+    mn_mg_kg ~ site*control_disturbed, 
+    data = fe_mn_data %>% filter(wfps_bin == "15 - 60 %"), 
+    var.equal = FALSE
+  )
+
+```
+Now I can do a Tukey's HSD as a follow-up
+
+```{r}
+TukeyHSD(mn_aov)
+```
+The only significant differences are between the sites. Going to simplify analysis to focus solely on site-wide differences
+
+
+### Statistics- by site
+
+#### Check normality
+
+NOTE: a transformation was necessary to achieve normal data
+```{r}
+
+fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site) %>%
+  summarise(
+    normality_stat = shapiro.test((mn_mg_kg)^0.33333333)$statistic,
+    normality_p_value = shapiro.test((mn_mg_kg)^0.33333333)$p.value
+  )
+ #will do stats on transformed values
+
+```
+
+
+#### Check for equal variances
+```{r}
+leveneTest(
+  (mn_mg_kg)^0.33333333 ~ site, 
+  data = fe_mn_data 
+)
+
+```
+
+Will transform mn data by taking cube root and then performing ANOVA.
+
+#### ANOVA on transformed (cube root) data
+```{r}
+
+mn_stats_data <- 
+  fe_mn_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  mutate(
+    mn_transformed = mn_mg_kg ^ (1/3)
+  )
+
+mn_aov <- aov(mn_transformed ~ site, data = mn_stats_data)
+
+summary(mn_aov)
+
+TukeyHSD(mn_aov)
+```
+
+
+
+
+

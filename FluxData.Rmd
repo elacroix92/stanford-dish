@@ -1,0 +1,1212 @@
+---
+title: "Incubation GHG Fluxes"
+author: "Emily Lacroix"
+date: "Last update 1/19/2022"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+## Load libraries
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(multcompView)
+library(car)
+
+options(dplyr.summarise.inform = FALSE)
+```
+
+## Files
+```{r eval=FALSE}
+data_file <- "StanfordDish_AllData.xlsx"
+```
+
+
+```{r include=FALSE}
+data_file <- "~/Box Sync/Stanford (elacroix@stanford.edu)/Research/StanfordDish/Data/StanfordDish_AllData.xlsx"
+```
+
+## Constants 
+```{r}
+control_cores <- c(1, 5, 9, 13)
+
+soil_core_area_m2 <- 0.00203
+
+anoxic_soil_core_area_m2 <- 0.0005067
+
+s_in_hr <- 3600
+
+hr_in_day <- 24
+
+umol_to_mmol <- 0.001
+
+anoxic_incubation_period_hr <- 3
+
+mols_per_l <- 1 / 22.4
+
+
+```
+
+## Figure theme
+```{r}
+my_theme <- function(base_size = 12, base_family = ""){ ## Control base font face and size. use `rel()` for lelative font size.
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(
+      panel.border = element_rect(colour = "black", fill = "transparent"),
+      panel.background  = element_blank(),
+      panel.grid = element_blank(),
+      strip.background = element_blank(),
+      legend.position="top",
+      legend.title = element_blank(),
+      strip.text = element_text(size = 13)
+    )
+}
+
+
+```
+
+
+## Figure labels
+```{r}
+site_labels <- c(
+  "DISHC" = "Clay Loam",
+  "DISHT" = "Loam",
+  "DISHR" = "Sandy Loam"
+)
+
+```
+
+# Import and Combine Data 
+
+## Import data
+```{r}
+disturbance_fluxes <- 
+  data_file %>% 
+  read_xlsx(sheet = "OxicIncubation")
+
+anoxic_dist_flux <- 
+  data_file %>% 
+  read_xlsx(sheet = "AnoxicIncubation")
+
+ox_en_fluxes <- 
+  data_file %>% 
+  read_xlsx(sheet = "OxygenEnrichment") %>% 
+  mutate(
+    across("site", factor, levels = c("DISHC", "DISHT", "DISHR")),
+    across("wfps_bin", factor, levels = c("15 - 60 %", "> 60 %"))
+  )
+
+dist_grav <- 
+  data_file %>% 
+  read_xlsx(sheet = "GravimetricData - Oxic")
+
+dist_mass_time <- 
+  data_file %>% 
+  read_xlsx(sheet = "MassOverTime") %>% 
+  #Make the pre-disturbance weights the same as the Day 0 After Disturbance (i.e., before subsampling)
+  bind_rows(
+    data_file %>% 
+      read_xlsx(sheet = "MassOverTime") %>% 
+      filter(day == 0) %>% 
+      select(-c(day, timing)) %>% 
+      mutate(timing = "Before Disturbance") %>% 
+      add_column(day = 7) %>% 
+      add_row(site = "DISHC", core = c(1:25), timing = "Before Disturbance", day = 1) %>% 
+      add_row(site = "DISHC", core = c(1:25), timing = "Before Disturbance", day = 2) %>% 
+      add_row(site = "DISHC", core = c(1:25), timing = "Before Disturbance", day = 3) %>% 
+      add_row(site = "DISHC", core = c(1:25), timing = "Before Disturbance", day = 4) %>% 
+      add_row(site = "DISHT", core = c(1:25), timing = "Before Disturbance", day = 1) %>% 
+      add_row(site = "DISHT", core = c(1:25), timing = "Before Disturbance", day = 2) %>% 
+      add_row(site = "DISHT", core = c(1:25), timing = "Before Disturbance", day = 3) %>% 
+      add_row(site = "DISHT", core = c(1:25), timing = "Before Disturbance", day = 4) %>% 
+      add_row(site = "DISHR", core = c(1:25), timing = "Before Disturbance", day = 1) %>% 
+      add_row(site = "DISHR", core = c(1:25), timing = "Before Disturbance", day = 2) %>% 
+      add_row(site = "DISHR", core = c(1:25), timing = "Before Disturbance", day = 3) %>% 
+      add_row(site = "DISHR", core = c(1:25), timing = "Before Disturbance", day = 4) %>% 
+      arrange(site, core, day) %>% 
+      fill(dry_mass, .direction = "up") %>% 
+      select(site, core, day, timing, dry_mass)
+  ) %>% 
+  mutate(across(timing, factor, levels = c("Before Disturbance", "After Disturbance")))
+
+tc_tn <- 
+  data_file %>% 
+  read_xlsx(sheet = "TotalCarbon")
+
+
+```
+
+## Combine Data 
+
+### Disturbance Incubation - Oxic 
+
+This code chunk:
+
+* joins the flux data with the average percent C and percent N for the corresponding site
+* joins the flux data with the soil dry mass
+* joins the flux data with the water content, volume, and bulk density data 
+* filters out any cores that were below 15% WFPS
+* turns site, wfps, and disturbance into factor variables for ordering
+* calculates g of soil C for each observation
+* calculates new flux unit
+
+```{r}
+
+oxic_dist_data <- 
+  disturbance_fluxes %>% 
+  left_join(
+    tc_tn %>% 
+      group_by(site) %>% 
+      summarise(
+        avg_perc_c = mean(perc_c, na.rm = TRUE),
+        avg_perc_n = mean(perc_n, na.rm = TRUE),
+        se_perc_c = sd(perc_c, na.rm = TRUE) / sqrt(n()),
+        se_perc_n = sd(perc_n, na.rm = TRUE) / sqrt(n())
+      ), 
+    by = "site"
+  ) %>% 
+  left_join(
+    dist_mass_time, 
+    by = c("site", "timing", "core_num" = "core", "day")
+  ) %>% 
+  left_join(dist_grav, by = c("site", "core_num" = "core")) %>% 
+  filter(wfps >= 15) %>% 
+  mutate(
+    across("site", factor, levels = c("DISHC", "DISHT", "DISHR")),
+    across(c("timing", "control_disturbed"), factor),
+    wfps_bin = 
+      factor(
+        if_else(wfps <= 60, "15 - 60 %", "> 60 %"), 
+        levels = c("15 - 60 %", "> 60 %")
+      ),
+    g_soil_c = dry_mass * avg_perc_c / 100,
+    flux_umol_g_soil_C_hr = flux * soil_core_area_m2 * s_in_hr / g_soil_c
+  ) 
+
+```
+
+
+### Disturbance Incubation - Anoxic Control
+
+This code chunk:
+
+* joins the anoxic flux data with carbon data 
+* joins the anoxic flux data with the average bulk density of each core 
+* calculates g of soil C in each core
+* calculates new flux unit
+
+```{r}
+anoxic_dist_data <-
+  anoxic_dist_flux %>% 
+  left_join(
+    tc_tn %>% 
+      group_by(site) %>% 
+      summarise(
+        avg_perc_c = mean(perc_c, na.rm = TRUE),
+        avg_perc_n = mean(perc_n, na.rm = TRUE),
+        se_perc_c = sd(perc_c, na.rm = TRUE) / sqrt(n()),
+        se_perc_n = sd(perc_n, na.rm = TRUE) / sqrt(n())
+      ), 
+    by = "site"
+  ) %>% 
+  filter(wfps >= 15) %>% 
+  mutate(
+    across("site", factor, levels = c("DISHC", "DISHT", "DISHR")),
+    g_soil_c = dry_wt * avg_perc_c / 100,
+    co2_umol_g_soil_C_hr = 
+      co2_flux_umol_m2_s * anoxic_soil_core_area_m2 * s_in_hr / g_soil_c,
+    ch4_umol_g_soil_C_hr = 
+      ch4_flux_umol_m2_s * anoxic_soil_core_area_m2 * s_in_hr / g_soil_c,
+    n2o_umol_g_soil_C_hr = 
+      ((n2o_accum / 10^6) * 10^6 * jar_volume_l * mols_per_l) / 
+      (g_soil_c * elapsed_time_hr),
+    wfps_bin = 
+      factor(
+        if_else(wfps <= 60, "15 - 60 %", "> 60 %"), 
+        levels = c("15 - 60 %", "> 60 %")
+      ),
+  ) 
+
+
+```
+
+# Figures and Analysis
+
+## Physical disturbance incubation (oxic)
+
+### Figure 2: Efflux from physical disturbance incubation 
+
+#### Isolate Before Disturbance Day 7 Fluxes (at WFPS bin level)
+
+```{r}
+bd_7_flux_umol_CO2_gC_hr <-
+  oxic_dist_data %>% 
+  filter(timing == "Before Disturbance", day == 7, wfps_bin == "15 - 60 %") %>%          
+  filter(!(core_num %in% control_cores)) %>% 
+  group_by(site) %>% 
+  summarise(
+    bd_7_avg_flux = mean(flux_umol_g_soil_C_hr, na.rm = TRUE),
+    bd_7_se_flux = sd(flux_umol_g_soil_C_hr, na.rm = TRUE)/sqrt(n())
+  ) 
+
+
+```
+
+#### Isolate Before Disturbance Day 7 Fluxes (at Core level)
+
+```{r}
+bd_7_flux_umol_CO2_gC_hr_core <-
+  oxic_dist_data %>% 
+  filter(timing == "Before Disturbance", day == 7) %>% 
+  group_by(site, wfps_bin, core_num) %>% 
+  summarise(
+    bd_7_avg_flux = mean(flux, na.rm = TRUE),
+    bd_7_se_flux = sd(flux, na.rm = TRUE)/sqrt(n())
+  ) 
+
+```
+
+#### Make figure
+
+```{r}
+oxic_dist_data %>% 
+  filter(wfps_bin == "15 - 60 %" & !(core_num %in% control_cores)) %>% 
+  left_join(bd_7_flux_umol_CO2_gC_hr, by = c("site")) %>% 
+  group_by(
+    site, 
+    wfps_bin, 
+    timing, 
+    day, 
+    cumulative_day, 
+    bd_7_avg_flux, 
+    bd_7_se_flux, 
+    control_disturbed
+  ) %>% 
+  summarize(
+    avg_flux = mean(flux_umol_g_soil_C_hr, na.rm = TRUE),
+    se_flux = sd(flux_umol_g_soil_C_hr, na.rm = TRUE) / sqrt(n())
+  ) %>% 
+  filter(
+    control_disturbed == "Undisturbed" & cumulative_day <= 7 | 
+      control_disturbed == "Disturbed"
+  ) %>% 
+  ggplot(
+    aes(
+      x = cumulative_day, 
+      color = control_disturbed, 
+      group = control_disturbed
+    )
+  ) + 
+  geom_vline(aes(xintercept = 7), color = "black", linetype = 3) +
+  geom_rect(
+      xmin = 7,
+      xmax = Inf,
+    aes(
+      ymin = bd_7_avg_flux - bd_7_se_flux, 
+      ymax = bd_7_avg_flux + bd_7_se_flux
+    ),
+    color = "gray",
+    fill = "gray",
+    alpha = 0.05,
+    size = 0.2
+  ) + 
+  geom_segment(
+    aes(y = bd_7_avg_flux, yend = bd_7_avg_flux),
+    x = 7, 
+    xend = Inf, 
+    linetype = 2
+  ) +
+  geom_pointrange(
+    aes(
+      y = avg_flux,
+      ymin = avg_flux - se_flux,
+      ymax = avg_flux + se_flux
+    ),
+    size = 0.25
+  ) + 
+  geom_line(aes(y = avg_flux), linetype = 2) +
+  scale_x_continuous(breaks = c(1, 7, 14, 21)) +
+  scale_color_manual(
+    values = c("red", "black"),
+    guide = guide_legend(reverse = TRUE)
+  ) +
+  annotate(
+    "rect", 
+    xmin = -Inf, 
+    xmax = 7, 
+    alpha = .15, 
+    ymin = -Inf, 
+    ymax = Inf
+  ) +
+  facet_grid(
+    cols = vars(site), 
+    labeller = labeller(site = site_labels)
+  ) +
+  my_theme() +
+  theme(
+    aspect.ratio = 1, 
+    legend.text = element_text(size = 12), 
+    legend.position = "top",
+    panel.background = element_rect(fill = "transparent",colour = NA), 
+    plot.background = element_rect(fill = "transparent",colour = NA)
+  ) +
+  labs(
+    x = "Time Since Wetting (days)",
+    y = expression(Efflux~"("~μmol~CO[2]~g~soil~C^-1~h^-1~")")
+  )
+
+
+```
+
+#### Table S1 - Reps per site: disturbed 
+```{r}
+oxic_dist_data %>% 
+  filter(wfps_bin == "15 - 60 %" & !(core_num %in% control_cores)) %>% 
+  left_join(bd_7_flux_umol_CO2_gC_hr, by = c("site")) %>% 
+  group_by(
+    site, 
+    wfps_bin, 
+    timing, 
+    day, 
+    cumulative_day, 
+    bd_7_avg_flux, 
+    bd_7_se_flux, 
+    control_disturbed
+  ) %>% 
+  summarize(
+    avg_flux = mean(flux_umol_g_soil_C_hr, na.rm = TRUE),
+    se_flux = sd(flux_umol_g_soil_C_hr, na.rm = TRUE) / sqrt(n()),
+    reps = n()
+  ) %>% 
+  filter(cumulative_day == 21)
+
+```
+
+
+#### Table S1 - Reps per site: Undisturbed (after disturbance)
+```{r}
+
+oxic_dist_data %>% 
+  filter(core_num %in% control_cores) %>% 
+  left_join(bd_7_flux_umol_CO2_gC_hr, by = c("site")) %>% 
+  group_by(
+    site, 
+    wfps_bin, 
+    timing, 
+    day, 
+    cumulative_day, 
+    bd_7_avg_flux, 
+    bd_7_se_flux, 
+    control_disturbed
+  ) %>% 
+  summarize(
+    avg_flux = mean(flux_umol_g_soil_C_hr, na.rm = TRUE),
+    se_flux = sd(flux_umol_g_soil_C_hr, na.rm = TRUE) / sqrt(n()),
+    reps = n()
+  ) %>% 
+  filter(cumulative_day == 17)
+
+```
+
+
+#### Inset values - CO2 evolved over 14 days 
+
+The code below 
+
+* conservatively assumes that two cores that were not measured the same day as disturbance treatment had no difference in CO2 for that day
+
+```{r}
+oxic_dist_cumulative_flux <- 
+  oxic_dist_data %>% 
+  filter(timing == "After Disturbance") %>%
+  filter(wfps_bin == "15 - 60 %" & !(core_num %in% control_cores)) %>% 
+  group_by(site, core_num, timing, cumulative_day, wfps_bin) %>%
+  summarise(
+    avg_ad_flux = mean(flux_umol_g_soil_C_hr, na.rm = TRUE),
+    se_ad_flux = sd(flux_umol_g_soil_C_hr, na.rm = TRUE)/sqrt(n())
+  ) %>%
+  left_join(
+    bd_7_flux_umol_CO2_gC_hr_core, 
+    by = c("site", "wfps_bin", "core_num")
+  ) %>% 
+  pivot_wider(
+    id_cols = c(
+      site,
+      core_num,
+      wfps_bin,
+      bd_7_avg_flux,
+      bd_7_se_flux
+    ),
+    names_from = cumulative_day,
+    values_from = avg_ad_flux
+  ) %>% 
+  rename_with(
+    ~str_c("adflux_",.), 
+    .cols = c(`7`, `8`, `9`, `10`, `14`, `17`, `21`)
+  ) %>% 
+  filter(!core_num %in% control_cores) %>% 
+  mutate(
+    across(adflux_7, ~if_else(is.na(.), bd_7_avg_flux, .)),
+    trap1 = 1 * hr_in_day * (adflux_7  + adflux_8) / 2,
+    trap2 = 1 * hr_in_day * (adflux_8 + adflux_9) / 2,
+    trap3 = 1 * hr_in_day * (adflux_9 + adflux_10) / 2,
+    trap4 = 4 * hr_in_day * (adflux_10 + adflux_14) / 2,
+    trap5 = 3 * hr_in_day * (adflux_14 + adflux_17)/ 2,
+    trap6 = 4 * hr_in_day * (adflux_17 + adflux_21) / 2,
+    total_co2_mmol = 
+      (trap1 + trap2 + trap3 + trap4 + trap5 + trap6) * umol_to_mmol,
+    hypothetical_undist_co2_min = 14 * bd_7_avg_flux * hr_in_day * umol_to_mmol
+  )
+```
+
+
+```{r}
+oxic_dist_cumulative_flux %>% 
+  group_by(site, wfps_bin) %>% 
+  summarize(
+    mean_mmolCO2_g_soilC = mean(total_co2_mmol, na.rm = TRUE),
+    se_mmolCO2_g_soilC = sd(total_co2_mmol, na.rm = TRUE) / sqrt(n()),
+    mean_hypothetical_undist_co2 = 
+      mean(hypothetical_undist_co2_min, na.rm = TRUE),
+    se_hypothetical_undist_co2 = 
+      sd(hypothetical_undist_co2_min, na.rm = TRUE) / sqrt(n()),
+  ) %>% 
+  pivot_longer(
+    cols = contains("co2"),
+    names_to = "data_type",
+    values_to = "flux"
+  ) %>% 
+  separate(data_type, c("data_type","dist_hypothetical","drop1","drop2")) %>% 
+  select(-c(drop1, drop2)) %>% 
+  mutate(
+    across(dist_hypothetical, ~if_else(. == "hypothetical", ., "dist"))
+  ) %>% 
+  pivot_wider(
+    id_cols = c(site, wfps_bin, dist_hypothetical),
+    names_from = data_type,
+    values_from = flux
+  ) %>%
+  mutate(
+    across(
+      dist_hypothetical, 
+      factor, 
+      levels = c("hypothetical", "dist"),
+      labels = c("Calculated", "Disturbed")
+    )
+  )
+```
+
+
+### Figure S1 - Disturbance incubation control cores 
+
+NOTE - DISHR core is at 66% WFPS; this is noted in the figure caption.
+```{r}
+oxic_dist_data %>% 
+  group_by(
+    site,
+    wfps_bin,
+    timing,
+    control_disturbed,
+    core_num,
+    day,
+    cumulative_day
+  ) %>% 
+  filter(
+    control_disturbed == "Undisturbed", 
+    core_num %in% control_cores,
+    (wfps_bin == "15 - 60 %" | (core_num == 9 & site == "DISHR"))
+  ) %>% 
+  summarise(
+    avg_flux = mean(flux_umol_g_soil_C_hr, na.rm = TRUE),
+    se_flux = sd(flux_umol_g_soil_C_hr, na.rm = TRUE) / sqrt(n())
+  ) %>% 
+  ggplot(
+    aes(
+      x = cumulative_day,
+      y = avg_flux,
+      group = core_num
+    )
+  ) +
+  geom_line() + 
+  geom_vline(aes(xintercept = 7), color = "black", linetype = 2) +
+  geom_pointrange(
+    aes(
+      ymin = avg_flux - se_flux,
+      ymax = avg_flux + se_flux
+    ),
+    color = "grey11",
+    fatten = 2
+  ) + 
+  scale_x_continuous(breaks = c(1, 7,  14, 21)) +
+  annotate("rect", xmin = -Inf, xmax = 7, alpha = .15, ymin = -Inf, ymax = Inf) +
+  my_theme() +
+  theme(aspect.ratio = 1) +
+  facet_grid(
+    cols = vars(site),
+    scales = "free_y",
+    labeller = labeller(site = site_labels)
+  ) +
+  labs(
+    x = "Time since moisture adjustment (days)",
+    y = expression(Efflux~"("~μmol~CO[2]~g~soil~C^-1~h^-1~")")
+  )
+
+
+```
+
+## Physical disturbance incubation (anoxic)
+
+### Isolate undisturbed and pre-disturbance fluxes
+
+```{r}
+anoxic_control_cores <- 
+  anoxic_dist_data %>% 
+  filter(control_disturbed == "Undisturbed", timing == "AD", day == 14) %>% 
+  pull(core)
+
+```
+
+```{r}
+
+bd_7_anoxic_flux <-
+  anoxic_dist_data %>% 
+  filter(!core %in% anoxic_control_cores) %>% 
+  filter(timing == "BD", day == 7) %>% 
+  select(site, core, wfps_bin, co2_umol_g_soil_C_hr, ch4_umol_g_soil_C_hr) %>% 
+  group_by(site, wfps_bin) %>% 
+  summarise(
+    avg_bd_7_co2_flux = mean(co2_umol_g_soil_C_hr, na.rm = TRUE),
+    avg_bd_7_ch4_flux = mean(ch4_umol_g_soil_C_hr, na.rm = TRUE),
+    se_bd_7_co2_flux = sd(co2_umol_g_soil_C_hr, na.rm = TRUE) / sqrt(n()),
+    se_bd_7_ch4_flux = sd(ch4_umol_g_soil_C_hr, na.rm = TRUE) / sqrt(n()),
+  )
+
+
+```
+
+
+```{r}
+bd_7_anoxic_flux_core <-
+  anoxic_dist_data %>% 
+  filter(!core %in% anoxic_control_cores) %>% 
+  filter(timing == "BD", day == 7) %>% 
+  select(site, core, wfps_bin, co2_umol_g_soil_C_hr, ch4_umol_g_soil_C_hr) %>% 
+  rename(
+    bd_7_co2_flux = co2_umol_g_soil_C_hr,
+    bd_7_ch4_flux = ch4_umol_g_soil_C_hr
+  )
+
+```
+
+### Figure 3 - Anoxic CO2 efflux
+
+```{r}
+anoxic_dist_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site, wfps_bin, control_disturbed, cumulative_day) %>% 
+  summarize(
+    avg_co2 = mean(co2_umol_g_soil_C_hr, na.rm = TRUE),
+    se_co2 = sd(co2_umol_g_soil_C_hr, na.rm = TRUE) / sqrt(n()),
+    avg_ch4 = mean(ch4_umol_g_soil_C_hr, na.rm = TRUE),
+    se_ch4 = sd(ch4_umol_g_soil_C_hr) / sqrt(n())
+  ) %>% 
+  left_join(bd_7_anoxic_flux, by = c("site", "wfps_bin")) %>% 
+  filter(
+    control_disturbed == "Disturbed"|
+      control_disturbed == "Undisturbed" & cumulative_day < 8
+  ) %>% 
+  ggplot(
+    aes(
+      x = cumulative_day,
+      y = avg_co2,
+      color = control_disturbed
+    )
+  ) +
+  geom_rect(
+    aes(
+      xmin = 7,
+      xmax = Inf,
+      ymin = avg_bd_7_co2_flux - se_bd_7_co2_flux, 
+      ymax = avg_bd_7_co2_flux + se_bd_7_co2_flux
+    ),
+    color = "gray",
+    fill = "gray",
+    alpha = 0.05,
+    size = 0.2
+  ) + 
+  geom_vline(aes(xintercept = 7), color = "black", linetype = 3) +
+  geom_segment(
+    aes(
+      y = avg_bd_7_co2_flux, 
+      yend = avg_bd_7_co2_flux,
+      x = 7,
+      xend = Inf
+      ),
+    linetype = 2
+  ) + 
+  geom_line() + 
+  geom_pointrange(
+    aes(
+      ymin = avg_co2 - se_co2,
+      ymax = avg_co2 + se_co2
+    ),
+    fatten = 2.5
+  ) + 
+  scale_x_continuous(breaks = c(1, 7, 14, 21)) +
+  scale_color_manual(
+    values = c("red","black"),
+    guide = guide_legend(reverse = TRUE)
+  ) +
+  annotate("rect", xmin = -Inf, xmax = 7, alpha = .15, ymin = -Inf, ymax = Inf) +
+  my_theme() +
+  theme(
+    legend.position = "top", 
+    aspect.ratio = 1,
+    legend.text = element_text(size = 12)
+  ) +
+  facet_grid(
+    rows = vars(wfps_bin), 
+    cols = vars(site),
+    scales = "free_y",
+    labeller = labeller(site = site_labels)
+  ) +
+  labs(
+    x = "Time since moisture adjustment (days)",
+    y = expression(Efflux~"("~μmol~CO[2]~g~soil~C^-1~h^-1~")")
+  )
+
+
+```
+
+### Table S1 - Calculating replicates
+
+```{r}
+anoxic_dist_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site, wfps_bin, control_disturbed, cumulative_day) %>% 
+  summarize(
+    avg_co2 = mean(co2_umol_g_soil_C_hr, na.rm = TRUE),
+    se_co2 = sd(co2_umol_g_soil_C_hr, na.rm = TRUE) / sqrt(n()),
+    avg_ch4 = mean(ch4_umol_g_soil_C_hr, na.rm = TRUE),
+    se_ch4 = sd(ch4_umol_g_soil_C_hr) / sqrt(n()),
+    reps = n()
+  ) %>% 
+  filter(cumulative_day == 17) %>% 
+  select(site, wfps_bin, control_disturbed, reps)
+```
+
+
+### Figure S2 - Anoxic disturbance incubation
+
+```{r}
+anoxic_dist_data %>% 
+  filter(wfps_bin == "15 - 60 %") %>% 
+  group_by(site, wfps_bin, control_disturbed, cumulative_day) %>% 
+  summarize(
+    avg_co2 = mean(co2_umol_g_soil_C_hr, na.rm = TRUE),
+    se_co2 = sd(co2_umol_g_soil_C_hr, na.rm = TRUE) / sqrt(n()),
+    avg_ch4 = mean(ch4_umol_g_soil_C_hr, na.rm = TRUE),
+    se_ch4 = sd(ch4_umol_g_soil_C_hr) / sqrt(n())
+  ) %>% 
+  left_join(bd_7_anoxic_flux, by = c("site", "wfps_bin")) %>% 
+  ggplot(
+    aes(
+      x = cumulative_day,
+      y = avg_co2,
+      color = control_disturbed
+    )
+  ) +
+  geom_rect(
+    aes(
+      xmin = 7,
+      xmax = Inf,
+      ymin = avg_bd_7_co2_flux - se_bd_7_co2_flux, 
+      ymax = avg_bd_7_co2_flux + se_bd_7_co2_flux
+    ),
+    color = "gray",
+    fill = "gray",
+    alpha = 0.05,
+    size = 0.2
+  ) + 
+  geom_vline(aes(xintercept = 7), color = "black", linetype = 3) +
+  geom_segment(
+    aes(
+      y = avg_bd_7_co2_flux, 
+      yend = avg_bd_7_co2_flux,
+      x = 7,
+      xend = Inf
+      ),
+    linetype = 2
+  ) + 
+  geom_line() + 
+  geom_pointrange(
+    aes(
+      ymin = avg_co2 - se_co2,
+      ymax = avg_co2 + se_co2
+    ),
+    fatten = 2.5
+  ) + 
+  scale_x_continuous(breaks = c(1, 7, 14, 21)) +
+  scale_color_manual(
+    values = c("red","black"),
+    guide = guide_legend(reverse = TRUE)
+  ) +
+  annotate("rect", xmin = -Inf, xmax = 7, alpha = .15, ymin = -Inf, ymax = Inf) +
+  my_theme() +
+  theme(
+    legend.position = "top", 
+    aspect.ratio = 1,
+    legend.text = element_text(size = 12)
+  ) +
+  facet_grid(
+    rows = vars(wfps_bin), 
+    cols = vars(site),
+    scales = "free_y",
+    labeller = labeller(site = site_labels)
+  ) +
+  labs(
+    x = "Time since moisture adjustment (days)",
+    y = expression(Efflux~"("~μmol~CO[2]~g~soil~C^-1~h^-1~")")
+  )
+
+
+```
+
+
+### Figure 3 Inset: Excess CO2 Evolved in Disturbed vs Calculated (Anoxic disturbance)
+
+```{r}
+anoxic_dist_data %>% 
+  filter(!core %in% anoxic_control_cores) %>% 
+  filter(timing == "AD") %>% 
+  pivot_wider(
+    id_cols = c(site, core, wfps_bin),
+    names_from = cumulative_day,
+    names_prefix = "adflux_",
+    values_from = co2_umol_g_soil_C_hr
+  ) %>% 
+  left_join(bd_7_anoxic_flux_core, by = c("site", "core", "wfps_bin")) %>%
+  filter(wfps_bin == "15 - 60 %") %>% 
+  mutate(
+    across(adflux_17, ~if_else(is.na(.), (adflux_14 + adflux_21) / 2, .)),
+    trap1 = 1 * hr_in_day * (adflux_7  + adflux_8) / 2,
+    trap2 = 1 * hr_in_day * (adflux_8 + adflux_9) / 2,
+    trap3 = 1 * hr_in_day * (adflux_9 + adflux_10) / 2,
+    trap4 = 4 * hr_in_day * (adflux_10 + adflux_14) / 2,
+    trap5 = 3 * hr_in_day * (adflux_14 + adflux_17)/ 2,
+    trap6 = 4 * hr_in_day * (adflux_17 + adflux_21) / 2,
+    total_co2_mmol = 
+      (trap1 + trap2 + trap3 + trap4 + trap5 + trap6) * umol_to_mmol,
+    hypothetical_undist_co2_min = 14 * bd_7_co2_flux * hr_in_day * umol_to_mmol
+  ) %>% 
+  group_by(site, wfps_bin) %>% 
+  summarize(
+    mean_mmolCO2_g_soilC = mean(total_co2_mmol, na.rm = TRUE),
+    se_mmolCO2_g_soilC = sd(total_co2_mmol, na.rm = TRUE)/sqrt(n()),
+    mean_hypothetical_undist_co2 = 
+      mean(hypothetical_undist_co2_min, na.rm = TRUE),
+    se_hypothetical_undist_co2 = 
+      sd(hypothetical_undist_co2_min, na.rm = TRUE)/sqrt(n()),
+  ) %>% 
+  pivot_longer(
+    cols = contains("co2"),
+    names_to = "data_type",
+    values_to = "flux"
+  ) %>% 
+  separate(data_type, c("data_type","dist_hypothetical","drop1","drop2")) %>% 
+  select(-c(drop1, drop2)) %>% 
+  mutate(
+    across(dist_hypothetical, ~if_else(. == "hypothetical", ., "dist"))
+  ) %>% 
+  pivot_wider(
+    id_cols = c(site, wfps_bin, dist_hypothetical),
+    names_from = data_type,
+    values_from = flux
+  ) %>%
+  mutate(
+    across(
+      dist_hypothetical, 
+      factor, 
+      levels = c("hypothetical", "dist"),
+      labels = c("Calculated", "Disturbed")
+    )
+  )
+```
+
+## Oxygen Enrichment 
+
+### Figure 1 - Oxygen enrichment flux
+
+```{r warning=FALSE}
+
+ox_en_fluxes %>% 
+  mutate(
+    across(c(ch4_flux_umol_m2_s_norm, n2o_flux_umol_m2_s), as.numeric),
+    co2_flux_umol_hr_g_soilC = 
+      co2_flux_umol_m2_s_norm * soil_core_area_m2 * s_in_hr,
+    ch4_flux_umol_hr_g_soilC = 
+      ch4_flux_umol_m2_s_norm * soil_core_area_m2 * s_in_hr,
+    n2o_flux_umol_hr = 
+      n2o_flux_umol_m2_s * soil_core_area_m2 * s_in_hr
+  ) %>% 
+  filter(site %in% c("DISHC", "DISHT", "DISHR")) %>% 
+  group_by(
+    site,
+    ox_enrich,
+    wfps_bin,
+    timing,
+    day,
+    cumulative_day
+  ) %>% 
+  summarise(
+    avg_co2_umol_hr_g_C = mean(co2_flux_umol_hr_g_soilC, na.rm = TRUE),
+    avg_ch4_umol_hr_g_C = mean(ch4_flux_umol_hr_g_soilC, na.rm = TRUE),
+    avg_ch4_umol_hr = mean(n2o_flux_umol_hr, na.rm = TRUE),
+    se_co2_umol_hr_g_C = sd(co2_flux_umol_hr_g_soilC, na.rm = TRUE) / sqrt(n()),
+    se_ch4_umol_hr_g_C = sd(ch4_flux_umol_hr_g_soilC, na.rm = TRUE) / sqrt(n()),
+    se_n2o_umol_hr = sd(n2o_flux_umol_hr, na.rm = TRUE) / sqrt(n())
+  ) %>% 
+  ggplot(
+    aes(x = cumulative_day, y = avg_co2_umol_hr_g_C, color = ox_enrich)
+  ) + 
+  geom_vline(aes(xintercept = 7), color = "black", linetype = 3) +
+  geom_pointrange(
+    aes(
+      ymin = avg_co2_umol_hr_g_C - se_co2_umol_hr_g_C,
+      ymax = avg_co2_umol_hr_g_C + se_co2_umol_hr_g_C
+    ),
+    size = 0.25
+  ) + 
+  geom_line() + 
+  annotate("rect", xmin = -Inf, xmax = 7, alpha = .15, ymin = -Inf, ymax = Inf) +
+  scale_color_manual(values = c("black", "red")) +
+  scale_x_continuous(breaks = c(1, 7, 14, 21)) + 
+  scale_y_continuous(breaks = c(0, 4, 8, 12)) +
+  facet_grid(
+    cols = vars(site), 
+    rows = vars(wfps_bin), 
+    labeller = labeller(site = site_labels)
+  ) +
+  my_theme() +
+  theme(
+    aspect.ratio = 1, 
+    legend.text = element_text(size = 12), 
+    legend.position = "top",
+    panel.background = element_rect(fill = "transparent",colour = NA), 
+    plot.background = element_rect(fill = "transparent",colour = NA),
+  ) +
+  labs(
+    x = "Time Since Wetting (days)",
+    y = expression(Efflux~"("~μmol~CO[2]~g~soil~C^-1~h^-1~")")
+  )
+  
+  
+```
+
+### Statistics: atmospheric vs enriched efflux by day
+
+#### Check normality
+
+```{r warning=FALSE}
+day_by_day <- 
+ox_en_fluxes %>% 
+  mutate(
+    across(c(ch4_flux_umol_m2_s_norm, n2o_flux_umol_m2_s), as.numeric),
+    co2_flux_umol_hr_g_soilC = 
+      co2_flux_umol_m2_s_norm * soil_core_area_m2 * s_in_hr,
+    ch4_flux_umol_hr_g_soilC = 
+      ch4_flux_umol_m2_s_norm * soil_core_area_m2 * s_in_hr,
+    n2o_flux_umol_hr = 
+      n2o_flux_umol_m2_s * soil_core_area_m2 * s_in_hr
+  ) %>% 
+  filter(site %in% c("DISHC", "DISHT", "DISHR"))
+
+
+day_by_day %>% 
+  filter(timing == "AD") %>% 
+  group_by(site, timing, day, ox_enrich, wfps_bin) %>% 
+  summarise(
+    normality_p = shapiro.test(co2_flux_umol_hr_g_soilC)$p.value
+  ) %>% 
+  arrange(normality_p)
+
+```
+It appears that the DISHC AD 1 > 60% WFPS is the only non-normal distribution...
+
+
+```{r}
+day_by_day %>% 
+  filter(site == "DISHC", timing == "AD", day == 1) %>% 
+  ggplot(aes(x = co2_flux_umol_hr_g_soilC)) + 
+  geom_histogram() + 
+  facet_grid(cols = vars(ox_enrich))
+
+day_by_day %>% 
+  filter(timing == "AD") %>% 
+  group_by(site, timing, day, ox_enrich, wfps_bin) %>% 
+  summarise(
+    normality_p = shapiro.test(co2_flux_umol_hr_g_soilC)$p.value
+  ) %>% 
+  arrange(normality_p)
+```
+
+
+It appears all of the fluxes on each day are normally distributed. 
+
+#### Check for equal variances 
+
+```{r}
+leveneTest(
+  co2_flux_umol_hr_g_soilC ~ site*timing*day*ox_enrich*wfps_bin, 
+  data = day_by_day %>% mutate(across(day, factor))
+)
+
+```
+It appears that there are equal variances.
+
+
+#### T-test(s)
+
+For every day that it is valid, I will do a t-test between the Atmospheric and Enriched treatment. 
+
+```{r}
+
+day_by_day %>% 
+  filter(!(site == "DISHC" & timing == "AD" & day == 1)) %>% 
+  filter(timing == "AD") %>% 
+  group_by(site, timing, day, ox_enrich, wfps_bin) %>% 
+  summarise(
+    normality_p = shapiro.test(co2_flux_umol_hr_g_soilC)$p.value
+  ) %>% 
+  arrange(normality_p)
+```
+
+Marginally significant and significant results
+
+
+```{r warning=FALSE}
+
+day_by_day %>% 
+  filter(!(site == "DISHC" & timing == "AD" & day == 1)) %>% 
+  filter(timing == "AD") %>% 
+  unite(site, timing, day, wfps_bin, col = category) %>% 
+  select(category, ox_enrich, co2_flux_umol_hr_g_soilC) %>% 
+  pivot_wider(
+    id_cols = category, 
+    names_from = ox_enrich, 
+    values_from = co2_flux_umol_hr_g_soilC
+  ) %>% 
+  group_by(category) %>% 
+  mutate(
+    t_test = map2_dbl(Atmospheric, Enriched, ~t.test(.x, .y)$p.value)
+  ) %>% 
+  separate(category, into = c("site", "timing", "day", "wfps_bin")) %>% 
+  filter(t_test < 0.1) %>% 
+  arrange(site, timing, as.integer(day))
+
+
+
+```
+
+All results
+
+```{r warning=FALSE}
+day_by_day %>% 
+  filter(!(site == "DISHC" & timing == "AD" & day == 1)) %>% 
+  filter(timing == "AD") %>% 
+  unite(site, timing, day, wfps_bin, col = category) %>% 
+  select(category, ox_enrich, co2_flux_umol_hr_g_soilC) %>% 
+  pivot_wider(
+    id_cols = category, 
+    names_from = ox_enrich, 
+    values_from = co2_flux_umol_hr_g_soilC
+  ) %>% 
+  group_by(category) %>% 
+  mutate(
+    t_test = map2_dbl(Atmospheric, Enriched, ~t.test(.x, .y)$p.value)
+  ) %>% 
+  separate(category, into = c("site", "timing", "day", "wfps_bin")) %>% 
+  arrange(site, timing, as.integer(day))
+```
+
+## Figure 1 Inset: Cumulative fluxes 
+
+```{r warning=FALSE}
+ox_en_co2_tot <- 
+  ox_en_fluxes %>% 
+  mutate(
+    across(c(ch4_flux_umol_m2_s_norm, n2o_flux_umol_m2_s), as.numeric),
+    co2_flux_umol_hr_g_soilC = 
+      co2_flux_umol_m2_s_norm * soil_core_area_m2 * s_in_hr,
+    ch4_flux_umol_hr_g_soilC = 
+      ch4_flux_umol_m2_s_norm * soil_core_area_m2 * s_in_hr,
+    n2o_flux_umol_hr = 
+      n2o_flux_umol_m2_s * soil_core_area_m2 * s_in_hr
+  ) %>% 
+  filter(site %in% c("DISHC", "DISHT", "DISHR")) %>% 
+  filter(timing == "AD" | (timing == "BD" & day == 7)) %>% 
+  select(
+    site, 
+    core_num, 
+    wfps_bin,
+    cumulative_day, 
+    ox_enrich,
+    co2_flux_umol_hr_g_soilC,
+    ch4_flux_umol_hr_g_soilC,
+    n2o_flux_umol_hr
+  ) %>% 
+  pivot_wider(
+    id_cols = c(site, core_num, wfps_bin, ox_enrich), 
+    names_from = cumulative_day,
+    names_prefix = "adflux_",
+    values_from = co2_flux_umol_hr_g_soilC
+  ) %>%
+  mutate(
+    trap1 = 1 * hr_in_day * (adflux_7  + adflux_8) / 2,
+    trap2 = 1 * hr_in_day * (adflux_8 + adflux_9) / 2,
+    trap3 = 1 * hr_in_day * (adflux_9 + adflux_10) / 2,
+    trap4 = 4 * hr_in_day * (adflux_10 + adflux_14) / 2,
+    trap5 = 3 * hr_in_day * (adflux_14 + adflux_17)/ 2,
+    trap6 = 4 * hr_in_day * (adflux_17 + adflux_21) / 2,
+    total_co2_mmol = (trap1 + trap2 + trap3 + trap4 + trap5 + trap6) * umol_to_mmol,
+  )
+
+```
+
+
+```{r}
+ox_en_co2_tot %>% 
+    group_by(wfps_bin, site, ox_enrich) %>% 
+  summarise(
+    avg_co2_mmol = mean(total_co2_mmol, na.rm = TRUE),
+    se_co2_mmol = sd(total_co2_mmol, na.rm = TRUE) / sqrt(n())
+  )
+```
+
+
+### Statistics - Atmospheric vs Enriched 
+
+#### Check normality
+
+```{r}
+ox_en_co2_tot %>% 
+  group_by(wfps_bin, site, ox_enrich) %>% 
+  summarise(
+    normality_stat = shapiro.test(total_co2_mmol)$statistic,
+    normality_p_value = shapiro.test(total_co2_mmol)$p.value
+  ) 
+```
+All are normally distributed! Yahoo! 
+
+#### Check for equal variances
+```{r}
+
+leveneTest(
+  total_co2_mmol ~ site*wfps_bin*ox_enrich, 
+  data = ox_en_co2_tot 
+)
+```
+
+Equal variances!
+
+#### T-test(s) 
+
+DISHC - dry
+
+```{r}
+t.test(
+  total_co2_mmol~ox_enrich, 
+  data = ox_en_co2_tot %>% 
+  filter(
+    site == "DISHC",
+    wfps_bin == "15 - 60 %"
+  )
+)
+
+```
+
+
+DISHC - wet
+
+```{r}
+t.test(
+  total_co2_mmol~ox_enrich, 
+  data = ox_en_co2_tot %>% 
+  filter(
+    site == "DISHC",
+    wfps_bin == "> 60 %"
+  )
+)
+```
+
+
+DISHT - dry
+
+```{r}
+t.test(
+  total_co2_mmol~ox_enrich, 
+  data = ox_en_co2_tot %>% 
+  filter(
+    site == "DISHT",
+    wfps_bin == "15 - 60 %"
+  )
+)
+```
+
+
+DISHT - wet
+
+```{r}
+t.test(
+  total_co2_mmol~ox_enrich, 
+  data = ox_en_co2_tot %>% 
+  filter(
+    site == "DISHT",
+    wfps_bin == "> 60 %"
+  )
+)
+```
+
+
+DISHR - dry
+
+```{r}
+t.test(
+  total_co2_mmol~ox_enrich, 
+  data =  ox_en_co2_tot %>% 
+  filter(
+    site == "DISHR",
+    wfps_bin == "15 - 60 %"
+  )
+)
+```
+
+
+DISHR - wet
+
+```{r}
+t.test(
+  total_co2_mmol~ox_enrich, 
+  data = ox_en_co2_tot %>% 
+  filter(
+    site == "DISHR",
+    wfps_bin == "> 60 %"
+  )
+)
+```
+
+
+
+
+
+
+
+
+
