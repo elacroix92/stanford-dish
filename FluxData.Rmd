@@ -534,8 +534,8 @@ oxic_dist_data %>%
       group = core_num
     )
   ) +
-  geom_line() + 
-  geom_vline(aes(xintercept = 7), color = "black", linetype = 2) +
+  geom_line(linetype = 2) + 
+  geom_vline(aes(xintercept = 7), color = "black", linetype = 3) +
   geom_pointrange(
     aes(
       ymin = avg_flux - se_flux,
@@ -557,7 +557,6 @@ oxic_dist_data %>%
     x = "Time since moisture adjustment (days)",
     y = expression(Efflux~"("~μmol~CO[2]~g~soil~C^-1~h^-1~")")
   )
-
 
 ```
 
@@ -651,7 +650,7 @@ anoxic_dist_data %>%
       ),
     linetype = 2
   ) + 
-  geom_line() + 
+  geom_line(linetype = 2) + 
   geom_pointrange(
     aes(
       ymin = avg_co2 - se_co2,
@@ -682,7 +681,6 @@ anoxic_dist_data %>%
     y = expression(Efflux~"("~μmol~CO[2]~g~soil~C^-1~h^-1~")")
   )
 
-
 ```
 
 ### Table S1 - Calculating replicates
@@ -703,7 +701,7 @@ anoxic_dist_data %>%
 ```
 
 
-### Figure S2 - Anoxic disturbance incubation
+### Figure S4 - Anoxic disturbance incubation
 
 ```{r}
 anoxic_dist_data %>% 
@@ -745,7 +743,7 @@ anoxic_dist_data %>%
       ),
     linetype = 2
   ) + 
-  geom_line() + 
+  geom_line(linetype = 2) + 
   geom_pointrange(
     aes(
       ymin = avg_co2 - se_co2,
@@ -775,7 +773,6 @@ anoxic_dist_data %>%
     x = "Time since moisture adjustment (days)",
     y = expression(Efflux~"("~μmol~CO[2]~g~soil~C^-1~h^-1~")")
   )
-
 
 ```
 
@@ -884,7 +881,7 @@ ox_en_fluxes %>%
     ),
     size = 0.25
   ) + 
-  geom_line() + 
+  geom_line(linetype= 2) + 
   annotate("rect", xmin = -Inf, xmax = 7, alpha = .15, ymin = -Inf, ymax = Inf) +
   scale_color_manual(values = c("black", "red")) +
   scale_x_continuous(breaks = c(1, 7, 14, 21)) + 
