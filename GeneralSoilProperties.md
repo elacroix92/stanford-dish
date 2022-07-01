@@ -1,7 +1,7 @@
 General Soil Properties
 ================
 Emily Lacroix
-Last update: 1/14/2022
+Last update: 7/1/2022
 
 -   [Setup](#setup)
     -   [Load libraries](#load-libraries)
@@ -16,6 +16,19 @@ Last update: 1/14/2022
         -   [Calculate texture for each
             sample](#calculate-texture-for-each-sample)
         -   [Summarize texture data](#summarize-texture-data)
+        -   [Test for differences amongst
+            sites](#test-for-differences-amongst-sites)
+-   [Aggregate Size](#aggregate-size)
+    -   [Calculate log average aggregate size
+        D](#calculate-log-average-aggregate-size-d)
+    -   [Import data and calculate geometric mean diameter and
+        meanweight
+        diameter](#import-data-and-calculate-geometric-mean-diameter-and-meanweight-diameter)
+    -   [Summarise aggregate size by
+        site](#summarise-aggregate-size-by-site)
+    -   [Statistics - MWD & GMD](#statistics---mwd--gmd)
+        -   [MWD - ANOVA](#mwd---anova)
+        -   [GMD - Wilcoxon rank sum](#gmd---wilcoxon-rank-sum)
 -   [Total Carbon and Nitrogen](#total-carbon-and-nitrogen)
     -   [Import and summarise data](#import-and-summarise-data)
     -   [Statistics - total C](#statistics---total-c)
@@ -156,18 +169,330 @@ This code calculates texture based on hydrometer readings.
     texture %>% 
       group_by(site) %>% 
       summarise(
-        across(c(sand, silt, clay), list(mean = mean, se = ~sd(.)/sqrt(n())))
+        across(c(sand, silt, clay), list(mean = mean, se = ~sd(.)/sqrt(n()))),
+        clay_normality_p = shapiro.test(clay)$p.value,
+        silt_normality_p = shapiro.test(silt)$p.value,
+        sand_normality_p = shapiro.test(sand)$p.value
       )
 
-    ## # A tibble: 3 × 7
-    ##   site  sand_mean sand_se silt_mean silt_se clay_mean clay_se
-    ##   <chr>     <dbl>   <dbl>     <dbl>   <dbl>     <dbl>   <dbl>
-    ## 1 DISHC      37.6   5.01       35.3   5.16      27.1    3.01 
-    ## 2 DISHR      52.8   0.720      41.1   0.209      6.06   0.549
-    ## 3 DISHT      39.7   5.49       44.6   5.14      15.7    0.959
+    ## # A tibble: 3 × 10
+    ##   site  sand_mean sand_se silt_mean silt_se clay_mean clay_se clay_normality_p
+    ##   <chr>     <dbl>   <dbl>     <dbl>   <dbl>     <dbl>   <dbl>            <dbl>
+    ## 1 DISHC      37.6   5.01       35.3   5.16      27.1    3.01             0.462
+    ## 2 DISHR      52.8   0.720      41.1   0.209      6.06   0.549            0.630
+    ## 3 DISHT      39.7   5.49       44.6   5.14      15.7    0.959            0.372
+    ## # … with 2 more variables: silt_normality_p <dbl>, sand_normality_p <dbl>
 
 DISHC texture = clay loam DISHR texture = sandy loam DISHT texture =
 loam
+
+### Test for differences amongst sites
+
+Sand and clay are normally distributed. Silt is not.
+
+    leveneTest(clay ~ site, data = texture)
+
+    ## Warning in leveneTest.default(y = y, group = group, ...): group coerced to
+    ## factor.
+
+    ## Levene's Test for Homogeneity of Variance (center = median)
+    ##       Df F value Pr(>F)
+    ## group  2  1.1491  0.378
+    ##        6
+
+    leveneTest(sand ~ site, data = texture)
+
+    ## Warning in leveneTest.default(y = y, group = group, ...): group coerced to
+    ## factor.
+
+    ## Levene's Test for Homogeneity of Variance (center = median)
+    ##       Df F value Pr(>F)
+    ## group  2   0.827 0.4817
+    ##        6
+
+    leveneTest(silt ~ site, data = texture)
+
+    ## Warning in leveneTest.default(y = y, group = group, ...): group coerced to
+    ## factor.
+
+    ## Levene's Test for Homogeneity of Variance (center = median)
+    ##       Df F value Pr(>F)
+    ## group  2  0.5486 0.6042
+    ##        6
+
+AOV for clay and sand
+
+    sand_aov <- aov(sand ~ site, data = texture)
+    summary(sand_aov)
+
+    ##             Df Sum Sq Mean Sq F value Pr(>F)  
+    ## site         2  407.6  203.81   3.652 0.0917 .
+    ## Residuals    6  334.9   55.81                 
+    ## ---
+    ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+    clay_aov <- aov(clay ~ site, data = texture)
+    summary(clay_aov)
+
+    ##             Df Sum Sq Mean Sq F value  Pr(>F)    
+    ## site         2  667.3   333.6   32.38 0.00061 ***
+    ## Residuals    6   61.8    10.3                    
+    ## ---
+    ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+    TukeyHSD(clay_aov)
+
+    ##   Tukey multiple comparisons of means
+    ##     95% family-wise confidence level
+    ## 
+    ## Fit: aov(formula = clay ~ site, data = texture)
+    ## 
+    ## $site
+    ##                   diff        lwr        upr     p adj
+    ## DISHR-DISHC -21.065447 -29.107704 -13.023191 0.0004861
+    ## DISHT-DISHC -11.446253 -19.488509  -3.403997 0.0112251
+    ## DISHT-DISHR   9.619194   1.576938  17.661451 0.0243507
+
+Pairwise Wilcoxon for silt
+
+    silt_wilcox <- 
+      pairwise.wilcox.test(
+      x = texture$silt,
+      g = texture$site,
+      p.adjust.method = "BH",
+      paired = FALSE
+    )
+
+    silt_wilcox
+
+    ## 
+    ##  Pairwise comparisons using Wilcoxon rank sum exact test 
+    ## 
+    ## data:  texture$silt and texture$site 
+    ## 
+    ##       DISHC DISHR
+    ## DISHR 1     -    
+    ## DISHT 1     1    
+    ## 
+    ## P value adjustment method: BH
+
+    silt_matrix_site <- tri.to.squ(silt_wilcox$p.value)
+    silt_letters_site <- multcompLetters(silt_matrix_site, compare ="<=", threshold = 0.05, Letters = letters)
+
+    silt_letters_site
+
+    ## $Letters
+    ## DISHC DISHR DISHT 
+    ##   "a"   "a"   "a" 
+    ## 
+    ## $LetterMatrix
+    ##          a
+    ## DISHC TRUE
+    ## DISHR TRUE
+    ## DISHT TRUE
+
+# Aggregate Size
+
+## Calculate log average aggregate size D
+
+    max_size <- 50
+    sieve1 <- 27
+    sieve2 <- 19
+    sieve3 <- 9.4
+    sieve4 <- 6.7
+    sieve5 <- 4.7
+    sieve6 <- 2
+    pan <- 0
+
+    log_sizes <-
+      tibble(
+        name = 
+          c(
+            "size1",
+            "size2", 
+            "size3", 
+            "size4", 
+            "size5",
+            "size6",
+            "size7"
+          ), 
+        log_size = 
+          c(
+            log(mean(c(max_size, sieve1))),
+            log(mean(c(sieve1, sieve2))),
+            log(mean(c(sieve2, sieve3))),
+            log(mean(c(sieve3, sieve4))),
+            log(mean(c(sieve4, sieve5))),
+            log(mean(c(sieve5, sieve6))),
+            log(mean(c(sieve6, pan)))
+            ),
+        avg_size = 
+          c(
+            mean(c(max_size, sieve1)),
+            mean(c(sieve1, sieve2)),
+            mean(c(sieve2, sieve3)),
+            mean(c(sieve3, sieve4)),
+            mean(c(sieve4, sieve5)),
+            mean(c(sieve5, sieve6)),
+            mean(c(sieve6, pan))
+            )
+      )
+
+    sieve_key <- 
+      c(
+        `27mm` = "size1", 
+        `19mm` = "size2", 
+        `9.4mm` = "size3", 
+        `6.7mm` = "size4", 
+        `4.7mm` = "size5",
+        `2mm` = "size6",
+        `less_2_mm` = "size7"
+      )
+
+    log_sizes
+
+    ## # A tibble: 7 × 3
+    ##   name  log_size avg_size
+    ##   <chr>    <dbl>    <dbl>
+    ## 1 size1     3.65    38.5 
+    ## 2 size2     3.14    23   
+    ## 3 size3     2.65    14.2 
+    ## 4 size4     2.09     8.05
+    ## 5 size5     1.74     5.7 
+    ## 6 size6     1.21     3.35
+    ## 7 size7     0        1
+
+## Import data and calculate geometric mean diameter and meanweight diameter
+
+    aggregate <-
+      data_file %>% 
+      read_xlsx(sheet = "AggregateSize") %>% 
+      pivot_longer(cols = ends_with("mm"), names_to = "size", values_to = "mass_g") %>% 
+      mutate(across(size, ~recode(., !!!sieve_key))) %>% 
+      left_join(log_sizes, by = c("size" = "name")) %>% 
+      mutate(
+        wi_logx = mass_g * log_size,
+        wi_x = (mass_g / total_mass_g) * avg_size
+      ) %>% 
+      group_by(sample, rep) %>% 
+      summarise(
+        sum_wi_logx = sum(wi_logx),
+        sum_wi = sum(mass_g),
+        mwd = sum(wi_x)
+      ) %>% 
+      mutate(
+        gmd = exp(sum_wi_logx / sum_wi)
+      )
+
+    aggregate
+
+    ## # A tibble: 9 × 6
+    ## # Groups:   sample [3]
+    ##   sample   rep sum_wi_logx sum_wi   mwd   gmd
+    ##   <chr>  <dbl>       <dbl>  <dbl> <dbl> <dbl>
+    ## 1 DISHC      1        754.    396  9.84  6.72
+    ## 2 DISHC      2        860.    369 16.9  10.3 
+    ## 3 DISHC      3        659.    282 14.2  10.3 
+    ## 4 DISHR      1        240.    344  5.70  2.01
+    ## 5 DISHR      2        191.    363  2.98  1.69
+    ## 6 DISHR      3        261.    324  5.05  2.24
+    ## 7 DISHT      1        514.    262 12.7   7.11
+    ## 8 DISHT      2        573.    317 10.7   6.09
+    ## 9 DISHT      3        503.    315  9.00  4.94
+
+## Summarise aggregate size by site
+
+    aggregate %>% 
+      group_by(sample) %>% 
+      summarise(
+        mean_mwd = mean(mwd),
+        se_mwd = sd(mwd) / sqrt(n()),
+        mean_gmd = mean(gmd),
+        se_gmd = sd(gmd) / sqrt(n()),
+        normality_p_mwd = shapiro.test(mwd)$p.value,
+        normality_p_gmd = shapiro.test(gmd)$p.value
+      )
+
+    ## # A tibble: 3 × 7
+    ##   sample mean_mwd se_mwd mean_gmd se_gmd normality_p_mwd normality_p_gmd
+    ##   <chr>     <dbl>  <dbl>    <dbl>  <dbl>           <dbl>           <dbl>
+    ## 1 DISHC     13.7   2.05      9.11  1.20            0.720          0.0296
+    ## 2 DISHR      4.57  0.820     1.98  0.157           0.438          0.825 
+    ## 3 DISHT     10.8   1.05      6.05  0.628           0.922          0.939
+
+## Statistics - MWD & GMD
+
+### MWD - ANOVA
+
+    leveneTest(mwd ~ sample, data = aggregate)
+
+    ## Warning in leveneTest.default(y = y, group = group, ...): group coerced to
+    ## factor.
+
+    ## Levene's Test for Homogeneity of Variance (center = median)
+    ##       Df F value Pr(>F)
+    ## group  2  0.7137 0.5271
+    ##        6
+
+    aov_mwd <- aov(mwd ~ sample, data = aggregate)
+    summary(aov_mwd)
+
+    ##             Df Sum Sq Mean Sq F value Pr(>F)  
+    ## sample       2 129.16   64.58   10.81 0.0102 *
+    ## Residuals    6  35.84    5.97                 
+    ## ---
+    ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+    TukeyHSD(aov_mwd)
+
+    ##   Tukey multiple comparisons of means
+    ##     95% family-wise confidence level
+    ## 
+    ## Fit: aov(formula = mwd ~ sample, data = aggregate)
+    ## 
+    ## $sample
+    ##                  diff          lwr       upr     p adj
+    ## DISHR-DISHC -9.076363 -15.19938556 -2.953340 0.0092769
+    ## DISHT-DISHC -2.866716  -8.98973877  3.256307 0.3824244
+    ## DISHT-DISHR  6.209647   0.08662414 12.332669 0.0474027
+
+### GMD - Wilcoxon rank sum
+
+    gmd_wilcox <- 
+      pairwise.wilcox.test(
+      x = aggregate$gmd,
+      g = aggregate$sample,
+      p.adjust.method = "BH",
+      paired = FALSE
+    )
+
+    gmd_wilcox
+
+    ## 
+    ##  Pairwise comparisons using Wilcoxon rank sum exact test 
+    ## 
+    ## data:  aggregate$gmd and aggregate$sample 
+    ## 
+    ##       DISHC DISHR
+    ## DISHR 0.15  -    
+    ## DISHT 0.20  0.15 
+    ## 
+    ## P value adjustment method: BH
+
+    gmd_matrix_site <- tri.to.squ(gmd_wilcox$p.value)
+    gmd_letters_site <- multcompLetters(gmd_matrix_site, compare ="<=", threshold = 0.05, Letters = letters)
+
+    gmd_letters_site
+
+    ## $Letters
+    ## DISHC DISHR DISHT 
+    ##   "a"   "a"   "a" 
+    ## 
+    ## $LetterMatrix
+    ##          a
+    ## DISHC TRUE
+    ## DISHR TRUE
+    ## DISHT TRUE
 
 # Total Carbon and Nitrogen
 
@@ -298,7 +623,7 @@ Significant differences. Do TukeyHSD as post-hoc test.
 
     ## `stat_bin()` using `bins = 30`. Pick better value with `binwidth`.
 
-![](GeneralSoilProperties_files/figure-gfm/unnamed-chunk-18-1.png)<!-- -->
+![](GeneralSoilProperties_files/figure-gfm/unnamed-chunk-26-1.png)<!-- -->
 
 Will try a squared transformation
 

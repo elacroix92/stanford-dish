@@ -1,7 +1,7 @@
 ---
 title: "General Soil Properties"
 author: "Emily Lacroix"
-date: "Last update: 1/14/2022"
+date: "Last update: 7/1/2022"
 output: 
   github_document:
     toc: true
@@ -146,13 +146,207 @@ texture <-
 texture %>% 
   group_by(site) %>% 
   summarise(
-    across(c(sand, silt, clay), list(mean = mean, se = ~sd(.)/sqrt(n())))
+    across(c(sand, silt, clay), list(mean = mean, se = ~sd(.)/sqrt(n()))),
+    clay_normality_p = shapiro.test(clay)$p.value,
+    silt_normality_p = shapiro.test(silt)$p.value,
+    sand_normality_p = shapiro.test(sand)$p.value
   )
 
 ```
 DISHC texture = clay loam
 DISHR texture = sandy loam
 DISHT texture = loam
+
+
+### Test for differences amongst sites
+
+Sand and clay are normally distributed. Silt is not. 
+```{r}
+
+leveneTest(clay ~ site, data = texture)
+
+leveneTest(sand ~ site, data = texture)
+
+leveneTest(silt ~ site, data = texture)
+
+```
+
+AOV for clay and sand
+```{r}
+sand_aov <- aov(sand ~ site, data = texture)
+summary(sand_aov)
+
+clay_aov <- aov(clay ~ site, data = texture)
+summary(clay_aov)
+TukeyHSD(clay_aov)
+
+```
+
+
+Pairwise Wilcoxon for silt
+```{r}
+silt_wilcox <- 
+  pairwise.wilcox.test(
+  x = texture$silt,
+  g = texture$site,
+  p.adjust.method = "BH",
+  paired = FALSE
+)
+
+silt_wilcox
+
+silt_matrix_site <- tri.to.squ(silt_wilcox$p.value)
+silt_letters_site <- multcompLetters(silt_matrix_site, compare ="<=", threshold = 0.05, Letters = letters)
+
+silt_letters_site
+```
+
+
+
+# Aggregate Size 
+
+## Calculate log average aggregate size D
+
+```{r}
+
+max_size <- 50
+sieve1 <- 27
+sieve2 <- 19
+sieve3 <- 9.4
+sieve4 <- 6.7
+sieve5 <- 4.7
+sieve6 <- 2
+pan <- 0
+
+log_sizes <-
+  tibble(
+    name = 
+      c(
+        "size1",
+        "size2", 
+        "size3", 
+        "size4", 
+        "size5",
+        "size6",
+        "size7"
+      ), 
+    log_size = 
+      c(
+        log(mean(c(max_size, sieve1))),
+        log(mean(c(sieve1, sieve2))),
+        log(mean(c(sieve2, sieve3))),
+        log(mean(c(sieve3, sieve4))),
+        log(mean(c(sieve4, sieve5))),
+        log(mean(c(sieve5, sieve6))),
+        log(mean(c(sieve6, pan)))
+        ),
+    avg_size = 
+      c(
+        mean(c(max_size, sieve1)),
+        mean(c(sieve1, sieve2)),
+        mean(c(sieve2, sieve3)),
+        mean(c(sieve3, sieve4)),
+        mean(c(sieve4, sieve5)),
+        mean(c(sieve5, sieve6)),
+        mean(c(sieve6, pan))
+        )
+  )
+
+sieve_key <- 
+  c(
+    `27mm` = "size1", 
+    `19mm` = "size2", 
+    `9.4mm` = "size3", 
+    `6.7mm` = "size4", 
+    `4.7mm` = "size5",
+    `2mm` = "size6",
+    `less_2_mm` = "size7"
+  )
+
+log_sizes
+
+
+```
+
+
+## Import data and calculate geometric mean diameter and meanweight diameter
+
+```{r}
+aggregate <-
+  data_file %>% 
+  read_xlsx(sheet = "AggregateSize") %>% 
+  pivot_longer(cols = ends_with("mm"), names_to = "size", values_to = "mass_g") %>% 
+  mutate(across(size, ~recode(., !!!sieve_key))) %>% 
+  left_join(log_sizes, by = c("size" = "name")) %>% 
+  mutate(
+    wi_logx = mass_g * log_size,
+    wi_x = (mass_g / total_mass_g) * avg_size
+  ) %>% 
+  group_by(sample, rep) %>% 
+  summarise(
+    sum_wi_logx = sum(wi_logx),
+    sum_wi = sum(mass_g),
+    mwd = sum(wi_x)
+  ) %>% 
+  mutate(
+    gmd = exp(sum_wi_logx / sum_wi)
+  )
+
+aggregate
+```
+
+## Summarise aggregate size by site
+
+```{r}
+
+aggregate %>% 
+  group_by(sample) %>% 
+  summarise(
+    mean_mwd = mean(mwd),
+    se_mwd = sd(mwd) / sqrt(n()),
+    mean_gmd = mean(gmd),
+    se_gmd = sd(gmd) / sqrt(n()),
+    normality_p_mwd = shapiro.test(mwd)$p.value,
+    normality_p_gmd = shapiro.test(gmd)$p.value
+  )
+
+```
+
+## Statistics - MWD & GMD
+
+### MWD - ANOVA
+```{r}
+
+leveneTest(mwd ~ sample, data = aggregate)
+
+aov_mwd <- aov(mwd ~ sample, data = aggregate)
+summary(aov_mwd)
+TukeyHSD(aov_mwd)
+
+```
+
+### GMD - Wilcoxon rank sum
+```{r}
+
+gmd_wilcox <- 
+  pairwise.wilcox.test(
+  x = aggregate$gmd,
+  g = aggregate$sample,
+  p.adjust.method = "BH",
+  paired = FALSE
+)
+
+gmd_wilcox
+
+gmd_matrix_site <- tri.to.squ(gmd_wilcox$p.value)
+gmd_letters_site <- multcompLetters(gmd_matrix_site, compare ="<=", threshold = 0.05, Letters = letters)
+
+gmd_letters_site
+
+
+```
+
+
 
 # Total Carbon and Nitrogen
 
