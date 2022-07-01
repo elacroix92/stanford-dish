@@ -1,7 +1,7 @@
 README
 ================
 Emily Lacroix
-1/19/2022
+7/1/2022
 
 This repository (repo) contains the code and data to reproduce all
 results and figures in the 2022 Geoderma publication: **Contributions of
@@ -19,8 +19,8 @@ manuscript. The `.md` files in this repo show formatted code output. The
 -   `FluxData.md` shows data processing for incubation data (fluxes)
 -   `ddPCR.md` shows data processing for microbial data.
 -   `FeMn.md` shows data processing for acid extractable Fe and Mn
--   `GeneralSoilProperties.md` shows data processing for texture, total
-    C, and total N
+-   `GeneralSoilProperties.md` shows data processing for texture,
+    aggregate size, total C, and total N
 -   `DensityFrac.md` shows data processing for the density fractionation
     data
 

@@ -1,7 +1,7 @@
 ---
 title: "README"
 author: "Emily Lacroix"
-date: "1/19/2022"
+date: "7/1/2022"
 output: github_document
 ---
 
@@ -20,7 +20,7 @@ Each RMarkdown file regenerates all results and figures used in the manuscript. 
 * `FluxData.md` shows data processing for incubation data (fluxes)
 * `ddPCR.md` shows data processing for microbial data. 
 * `FeMn.md` shows data processing for  acid extractable Fe and Mn 
-* `GeneralSoilProperties.md` shows data processing for texture, total C, and total N
+* `GeneralSoilProperties.md` shows data processing for texture, aggregate size, total C, and total N
 * `DensityFrac.md` shows data processing for the density fractionation data
 
 Please contact the corresponding author(s) with questions or enhanced access. 
